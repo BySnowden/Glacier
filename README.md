@@ -73,6 +73,19 @@ Create the final optimized `.exe` in `build/bin/`:
 wails build
 ```
 
+## 🛡️ Transparency & Security
+
+As an independent developer, I don't have a $400/year "Publisher Certificate" to sign my apps. Because of this, Windows SmartScreen will likely show a warning when you first run Glacier.
+
+**Is it safe?**
+Absolutely. Glacier is fully open-source under the **GPLv3 license**. This means:
+
+- Every single line of code is available right here for you to audit.
+- There are no hidden backdoors or telemetry; the app only interacts with your Minecraft folder.
+- You can even build the executable yourself from the source if you want to be 100% sure of what you're running.
+
+To bypass the warning: Click **"More Info"** -> **"Run Anyway"**.
+
 ---
 
 **Licensed under GPLv3.**
