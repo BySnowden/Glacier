@@ -86,6 +86,11 @@ Absolutely. Glacier is fully open-source under the **GPLv3 license**. This means
 
 To bypass the warning: Click **"More Info"** -> **"Run Anyway"**.
 
+## ❤️ Support
+
+If Glacier helped you save time or fix a crash, consider supporting the project!
+[Support me on Ko-fi](https://ko-fi.com/bysnowden)
+
 ---
 
 **Licensed under GPLv3.**
