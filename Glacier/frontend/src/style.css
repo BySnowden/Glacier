@@ -1,0 +1,54 @@
+:root {
+  --background: #f5f7fa;
+  --foreground: #1a1d23;
+  --card: #ffffff;
+  --card-border: #e2e8f0;
+  --primary: #2563eb;
+  --primary-fg: #ffffff;
+  --muted: #94a3b8;
+  --muted-fg: #64748b;
+  --destructive: #ef4444;
+  --warning: #f59e0b;
+  --success: #10b981;
+  --fabric-bg: rgba(37, 99, 235, 0.1);
+  --fabric-text: #2563eb;
+  --forge-bg: rgba(249, 115, 22, 0.1);
+  --forge-text: #f97316;
+  --radius: 8px;
+}
+
+body.dark {
+  --background: #0f1419;
+  --foreground: #e2e8f0;
+  --card: #1a1f2e;
+  --card-border: #1e293b;
+  --primary: #3b82f6;
+  --muted: #475569;
+  --muted-fg: #94a3b8;
+  --fabric-text: #60a5fa;
+  --forge-text: #fb923c;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: "Segoe UI", sans-serif;
+  margin: 0;
+  transition: background-color 0.3s, color 0.3s;
+}
+
+.btn {
+  cursor: pointer;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+.btn-primary {
+  background: var(--primary);
+  color: var(--primary-fg);
+  padding: 10px 20px;
+}
+.btn-primary:hover {
+  opacity: 0.9;
+}
