@@ -71,3 +71,27 @@ func (a *App) ScanMods(folderPath string) ([]ModMetadata, error) {
 	wg.Wait()
 	return results, nil
 }
+
+func (a *App) ValidateMods(folderPath string) ([]DependencyIssue, error) {
+    // gets all jar files
+    entries, err := os.ReadDir(folderPath)
+    if err != nil {
+        return nil, err
+    }
+
+    var scannedResults []ScanResult
+
+    // scans every jar for metadata
+    for _, entry := range entries {
+        if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".jar") {
+            fullPath := filepath.Join(folderPath, entry.Name())
+            
+            // calls the function from scanner.go
+            res, err := ScanJarForIssues(fullPath)
+            if err == nil {
+                scannedResults = append(scannedResults, *res)
+            }
+        }
+    }
+    return ValidateDependencies(scannedResults), nil
+}

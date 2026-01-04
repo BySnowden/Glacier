@@ -4,6 +4,9 @@ go 1.23
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/blang/semver/v4 v4.0.0
+	github.com/masahiro331/go-mvn-version v0.0.0-20250131095131-f4974fa13b8a
+	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/wailsapp/wails/v2 v2.11.0
 )
 
@@ -13,6 +16,8 @@ require (
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/hashicorp/errwrap v1.0.0 // indirect
+	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e // indirect
 	github.com/labstack/echo/v4 v4.13.3 // indirect
 	github.com/labstack/gommon v0.4.2 // indirect
@@ -35,6 +40,7 @@ require (
 	golang.org/x/net v0.35.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
+	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 )
 
 // replace github.com/wailsapp/wails/v2 v2.11.0 => C:\Users\Trist\go\pkg\mod
