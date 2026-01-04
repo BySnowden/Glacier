@@ -5,8 +5,9 @@
         ScanMods,
         ValidateMods,
         CheckForUpdates,
-        TriggerUpdate,
+        DownloadAndInstall, // Added this
     } from "../wailsjs/go/main/App";
+    import { EventsOn } from "../wailsjs/runtime/runtime"; // Added this
     import { onMount } from "svelte";
 
     // Import the custom logo
@@ -32,6 +33,8 @@
     let latestVersion = "";
     let updateUrl = "";
     let isCheckingUpdate = false;
+    let isDownloading = false; // Added this
+    let downloadProgress = 0; // Added this
 
     let darkMode = true;
     let folderPath = "";
@@ -63,8 +66,6 @@
     let checkStatus = "";
 
     // --- IGNORED DEPENDENCIES ---
-    // These are "environment" dependencies that typically aren't .jar files
-    // so we filter them out to prevent false alarms.
     const IGNORED_DEPS = new Set([
         "fabric",
         "fabricloader",
@@ -135,6 +136,12 @@
         document.addEventListener("contextmenu", (event) =>
             event.preventDefault(),
         );
+
+        // Listen for download progress from backend
+        EventsOn("update-progress", (percent) => {
+            downloadProgress = percent;
+        });
+
         checkForAppUpdates();
     });
 
@@ -153,9 +160,18 @@
         isCheckingUpdate = false;
     }
 
-    function handleUpdateClick() {
+    async function handleUpdateClick() {
         if (!updateAvailable) return;
-        TriggerUpdate(updateUrl);
+
+        isDownloading = true;
+        try {
+            // This calls the Go function to download and install
+            await DownloadAndInstall(updateUrl);
+        } catch (err) {
+            console.error("Update failed", err);
+            isDownloading = false;
+            // Optionally alert user here
+        }
     }
 
     async function pickFolder() {
@@ -227,24 +243,38 @@
             </div>
 
             <div class="header-controls">
-                <button
-                    class="update-btn {updateAvailable ? 'available' : ''}"
-                    on:click={handleUpdateClick}
-                    disabled={!updateAvailable}
-                    title={updateAvailable
-                        ? `Update available: ${latestVersion}`
-                        : "Glacier is up to date"}
-                >
-                    {#if isCheckingUpdate}
-                        <i class="fa-solid fa-circle-notch fa-spin"></i>
-                    {:else if updateAvailable}
-                        <i class="fa-solid fa-cloud-arrow-down"></i>
-                        <span>Update v{latestVersion}</span>
-                    {:else}
-                        <i class="fa-solid fa-check"></i>
-                        <span>Up to Date</span>
-                    {/if}
-                </button>
+                {#if isDownloading}
+                    <div class="update-progress-container">
+                        <span class="progress-text"
+                            >Downloading... {downloadProgress}%</span
+                        >
+                        <div class="progress-bar-bg">
+                            <div
+                                class="progress-bar-fill"
+                                style="width: {downloadProgress}%"
+                            ></div>
+                        </div>
+                    </div>
+                {:else}
+                    <button
+                        class="update-btn {updateAvailable ? 'available' : ''}"
+                        on:click={handleUpdateClick}
+                        disabled={!updateAvailable}
+                        title={updateAvailable
+                            ? `Update available: ${latestVersion}`
+                            : "Glacier is up to date"}
+                    >
+                        {#if isCheckingUpdate}
+                            <i class="fa-solid fa-circle-notch fa-spin"></i>
+                        {:else if updateAvailable}
+                            <i class="fa-solid fa-cloud-arrow-down"></i>
+                            <span>Update v{latestVersion}</span>
+                        {:else}
+                            <i class="fa-solid fa-check"></i>
+                            <span>Up to Date</span>
+                        {/if}
+                    </button>
+                {/if}
 
                 <button class="theme-toggle" on:click={toggleTheme}>
                     <i class="fa-solid {darkMode ? 'fa-sun' : 'fa-moon'}"></i>
@@ -790,6 +820,7 @@
         color: var(--foreground);
     }
 
+    /* Update Button Styles */
     .update-btn {
         background: transparent;
         border: 1px solid var(--card-border);
@@ -818,6 +849,34 @@
     .update-btn.available:hover {
         filter: brightness(1.1);
         transform: translateY(-1px);
+    }
+
+    /* Progress Bar Styles */
+    .update-progress-container {
+        width: 150px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .progress-text {
+        font-size: 0.75rem;
+        color: var(--muted-fg);
+        text-align: center;
+    }
+
+    .progress-bar-bg {
+        width: 100%;
+        height: 6px;
+        background: var(--card-border);
+        border-radius: 3px;
+        overflow: hidden;
+    }
+
+    .progress-bar-fill {
+        height: 100%;
+        background: var(--primary);
+        transition: width 0.2s ease;
     }
 
     @keyframes pulse-green {

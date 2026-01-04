@@ -9,8 +9,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -28,6 +30,25 @@ type UpdateResponse struct {
 	DownloadUrl     string `json:"downloadUrl"`
 }
 
+// progressWriter tracks download progress
+type progressWriter struct {
+	total      uint64
+	downloaded uint64
+	ctx        context.Context
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	pw.downloaded += uint64(n)
+
+	if pw.total > 0 {
+		percentage := float64(pw.downloaded) / float64(pw.total) * 100
+		runtime.EventsEmit(pw.ctx, "update-progress", int(percentage))
+	}
+
+	return n, nil
+}
+
 const AppVersion = "1.1.1"
 
 func NewApp() *App {
@@ -38,9 +59,9 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
-// CheckForUpdates hits the GitHub API to see if a newer release exists
+// CheckForUpdates hits the GitHub API to find the specific .exe asset
 func (a *App) CheckForUpdates() UpdateResponse {
-	// 1. Request latest release metadata from GitHub API (Not the website HTML)
+	// 1. Request latest release metadata from GitHub API
 	resp, err := http.Get("https://api.github.com/repos/BySnowden/Glacier/releases/latest")
 	if err != nil {
 		return UpdateResponse{false, "", ""}
@@ -53,18 +74,32 @@ func (a *App) CheckForUpdates() UpdateResponse {
 		return UpdateResponse{false, "", ""}
 	}
 
-	// 3. Extract the tag name (e.g., "v1.2.0")
 	tagName, ok := result["tag_name"].(string)
 	if !ok {
 		return UpdateResponse{false, "", ""}
 	}
-
-	// 4. Compare versions (Remove 'v' prefix if present)
 	cleanTag := strings.TrimPrefix(tagName, "v")
 
 	if cleanTag != AppVersion {
-		// Get the HTML URL (the page where users can download the exe)
-		downloadUrl, _ := result["html_url"].(string)
+		assets, _ := result["assets"].([]interface{})
+		downloadUrl := ""
+
+		for _, asset := range assets {
+			a := asset.(map[string]interface{})
+			name := a["name"].(string)
+
+			if strings.HasSuffix(strings.ToLower(name), ".exe") {
+				downloadUrl = a["browser_download_url"].(string)
+				// Prefer the amd64 one if running on Intel/AMD, or arm64 if on Surface
+				// For now, this just grabs the first executable it sees.
+				break
+			}
+		}
+
+		// Fallback: If no exe found in assets, link to the release page
+		if downloadUrl == "" {
+			downloadUrl, _ = result["html_url"].(string)
+		}
 
 		return UpdateResponse{
 			UpdateAvailable: true,
@@ -73,11 +108,49 @@ func (a *App) CheckForUpdates() UpdateResponse {
 		}
 	}
 
-	// No update available
 	return UpdateResponse{false, AppVersion, ""}
 }
 
-// TriggerUpdate opens the download URL in the user's default browser
+// DownloadAndInstall downloads the update and runs the installer
+func (a *App) DownloadAndInstall(url string) error {
+	// 1. Create a temp file
+	tempFile, err := os.CreateTemp("", "Glacier-Update-*.exe")
+	if err != nil {
+		return err
+	}
+	defer tempFile.Close()
+
+	// 2. Get the data
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	// 3. Set up progress tracking
+	pw := &progressWriter{
+		total: uint64(resp.ContentLength),
+		ctx:   a.ctx,
+	}
+
+	// 4. Copy data from internet to file (with progress)
+	if _, err = io.Copy(io.MultiWriter(tempFile, pw), resp.Body); err != nil {
+		return err
+	}
+
+	// 5. Run the installer silently
+	// "cmd /C start ..." allows it to run detached so we can close this app safely
+	cmd := exec.Command("cmd", "/C", "start", tempFile.Name(), "/SILENT")
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	// 6. Kill this app so the installer can overwrite files
+	runtime.Quit(a.ctx)
+	return nil
+}
+
+// TriggerUpdate opens the download URL in the user's default browser (Manual Fallback)
 func (a *App) TriggerUpdate(url string) {
 	runtime.BrowserOpenURL(a.ctx, url)
 }
@@ -127,7 +200,6 @@ func (a *App) ScanMods(folderPath string) ([]ModMetadata, error) {
 }
 
 func (a *App) ValidateMods(folderPath string) ([]DependencyIssue, error) {
-	// gets all jar files
 	entries, err := os.ReadDir(folderPath)
 	if err != nil {
 		return nil, err
@@ -135,12 +207,10 @@ func (a *App) ValidateMods(folderPath string) ([]DependencyIssue, error) {
 
 	var scannedResults []ScanResult
 
-	// scans every jar for metadata
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".jar") {
 			fullPath := filepath.Join(folderPath, entry.Name())
 
-			// calls the function from scanner.go
 			res, err := ScanJarForIssues(fullPath)
 			if err == nil {
 				scannedResults = append(scannedResults, *res)
