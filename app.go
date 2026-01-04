@@ -62,7 +62,7 @@ func (pw *progressWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-const AppVersion = "1.1.4"
+const AppVersion = "1.1.5"
 
 // Update configuration
 const (
