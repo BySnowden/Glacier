@@ -1,17 +1,17 @@
 {
-  "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "Glacier Mod Manager",
-  "outputfilename": "Glacier-Mod-Manager",
-  "info": {
-    "productVersion": "1.0.0",
-    "productName": "Glacier Mod Manager",
-    "copyright": "Copyright © 2026 BySnowden",
-    "comments": "A modern Minecraft mod management utility."
-  },
-  "frontend:install": "npm install",
-  "frontend:build": "npm run build",
-  "frontend:dev:watcher": "npm run dev",
-  "author": {
-    "name": "BySnowden"
-  }
+    "$schema":  "https://wails.io/schemas/config.v2.json",
+    "name":  "Glacier Mod Manager",
+    "outputfilename":  "Glacier-Mod-Manager",
+    "info":  {
+                 "productVersion":  "1.1.4",
+                 "productName":  "Glacier Mod Manager",
+                 "copyright":  "Copyright © 2026 BySnowden",
+                 "comments":  "A modern Minecraft mod management utility."
+             },
+    "frontend:install":  "npm install",
+    "frontend:build":  "npm run build",
+    "frontend:dev:watcher":  "npm run dev",
+    "author":  {
+                   "name":  "BySnowden"
+               }
 }
