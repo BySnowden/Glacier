@@ -24,3 +24,68 @@ Thumbs.db
 # --- Go Specific ---
 # In case you ever create a workspace file
 go.work
+
+# --- Temporary Files ---
+# Temporary files created during development/testing
+*.tmp
+*.temp
+*.log
+*.cache
+
+# Backup files created by editors
+*.bak
+*.backup
+*~
+*.swp
+*.swo
+
+# --- Development/Testing ---
+# Test coverage reports
+coverage.out
+*.cover
+
+# Temporary build files
+*.exe~
+*.dll~
+
+# Local environment files (if you ever add any)
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# --- Package Manager Lockfiles (optional) ---
+# Uncomment if you want to ignore lockfiles (usually you want to keep them)
+# package-lock.json
+# yarn.lock
+
+# --- OS Specific ---
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# Windows
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# macOS
+*.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop

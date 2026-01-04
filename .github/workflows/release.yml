@@ -1,0 +1,165 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.2.0)'
+        required: true
+        default: 'v1.0.0'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        build:
+          - name: 'Glacier-windows-amd64'
+            platform: 'windows/amd64'
+            os: 'windows-latest'
+          - name: 'Glacier-windows-arm64'
+            platform: 'windows/arm64'
+            os: 'windows-latest'
+          - name: 'Glacier-linux-amd64'
+            platform: 'linux/amd64'
+            os: 'ubuntu-latest'
+          - name: 'Glacier-darwin-amd64'
+            platform: 'darwin/amd64'
+            os: 'macos-latest'
+          - name: 'Glacier-darwin-arm64'
+            platform: 'darwin/arm64'
+            os: 'macos-latest'
+
+    runs-on: ${{ matrix.build.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build wails
+        uses: dAppServer/wails-build-action@v2.2
+        id: build
+        with:
+          build-name: ${{ matrix.build.name }}
+          build-platform: ${{ matrix.build.platform }}
+          package: false
+          go-version: '1.21'
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.build.name }}
+          path: |
+            */bin/
+            *\bin\
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+
+          # Windows AMD64
+          if [ -f "Glacier-windows-amd64/bin/Glacier-Mod-Manager.exe" ]; then
+            cp "Glacier-windows-amd64/bin/Glacier-Mod-Manager.exe" "release-assets/Glacier-Mod-Manager-windows-amd64.exe"
+          fi
+
+          # Windows ARM64
+          if [ -f "Glacier-windows-arm64/bin/Glacier-Mod-Manager.exe" ]; then
+            cp "Glacier-windows-arm64/bin/Glacier-Mod-Manager.exe" "release-assets/Glacier-Mod-Manager-windows-arm64.exe"
+          fi
+
+          # Linux AMD64
+          if [ -f "Glacier-linux-amd64/bin/Glacier-Mod-Manager" ]; then
+            cp "Glacier-linux-amd64/bin/Glacier-Mod-Manager" "release-assets/Glacier-Mod-Manager-linux-amd64"
+            chmod +x "release-assets/Glacier-Mod-Manager-linux-amd64"
+          fi
+
+          # macOS AMD64
+          if [ -f "Glacier-darwin-amd64/bin/Glacier-Mod-Manager.app" ]; then
+            zip -r "release-assets/Glacier-Mod-Manager-macos-amd64.zip" "Glacier-darwin-amd64/bin/Glacier-Mod-Manager.app"
+          fi
+
+          # macOS ARM64
+          if [ -f "Glacier-darwin-arm64/bin/Glacier-Mod-Manager.app" ]; then
+            zip -r "release-assets/Glacier-Mod-Manager-macos-arm64.zip" "Glacier-darwin-arm64/bin/Glacier-Mod-Manager.app"
+          fi
+
+          ls -la release-assets/
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Glacier Mod Manager ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          files: release-assets/*
+          body: |
+            ## What's Changed
+
+            ### Features
+            - 🔄 **Automatic Updates**: Click the update button to automatically download and install the latest version
+            - 📦 **Mod Management**: Scan and manage your Minecraft mods with ease
+            - 🔍 **Dependency Checking**: Automatically detect missing dependencies and conflicts
+            - 🌙 **Dark/Light Theme**: Toggle between dark and light modes
+
+            ### Installation
+
+            **Windows:**
+            - Download `Glacier-Mod-Manager-windows-amd64.exe` for Intel/AMD processors
+            - Download `Glacier-Mod-Manager-windows-arm64.exe` for ARM processors (Surface, etc.)
+
+            **macOS:**
+            - Download `Glacier-Mod-Manager-macos-amd64.zip` for Intel Macs
+            - Download `Glacier-Mod-Manager-macos-arm64.zip` for Apple Silicon Macs (M1/M2/M3)
+
+            **Linux:**
+            - Download `Glacier-Mod-Manager-linux-amd64` and make it executable with `chmod +x`
+
+            ### Auto-Update
+            The app will automatically check for updates on startup and show an update button when available. Simply click to update!
+
+            **Full Changelog**: https://github.com/${{ github.repository }}/compare/v${{ steps.previous_tag.outputs.tag }}...${{ steps.version.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update latest release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: latest
+          name: Latest Development Build
+          draft: false
+          prerelease: true
+          files: release-assets/*
+          body: |
+            This is the latest development build. It may contain bugs.
+            For stable releases, use the numbered versions above.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Now let me create a comprehensive update system documentation:

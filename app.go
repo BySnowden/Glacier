@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -28,6 +30,13 @@ type UpdateResponse struct {
 	UpdateAvailable bool   `json:"updateAvailable"`
 	LatestVersion   string `json:"latestVersion"`
 	DownloadUrl     string `json:"downloadUrl"`
+	Error           string `json:"error,omitempty"`
+}
+
+type UpdateProgress struct {
+	Stage      string `json:"stage"`
+	Percentage int    `json:"percentage"`
+	Message    string `json:"message"`
 }
 
 // progressWriter tracks download progress
@@ -43,13 +52,25 @@ func (pw *progressWriter) Write(p []byte) (int, error) {
 
 	if pw.total > 0 {
 		percentage := float64(pw.downloaded) / float64(pw.total) * 100
-		runtime.EventsEmit(pw.ctx, "update-progress", int(percentage))
+		runtime.EventsEmit(pw.ctx, "update-progress", UpdateProgress{
+			Stage:      "downloading",
+			Percentage: int(percentage),
+			Message:    fmt.Sprintf("Downloaded %d%% of update", int(percentage)),
+		})
 	}
 
 	return n, nil
 }
 
 const AppVersion = "1.1.1"
+
+// Update configuration
+const (
+	GITHUB_OWNER         = "BySnowden"
+	GITHUB_REPO          = "Glacier"
+	UPDATE_CHECK_TIMEOUT = 10 * time.Second
+	DOWNLOAD_TIMEOUT     = 30 * time.Minute
+)
 
 func NewApp() *App {
 	return &App{}
@@ -61,22 +82,28 @@ func (a *App) startup(ctx context.Context) {
 
 // CheckForUpdates hits the GitHub API to find the specific .exe asset
 func (a *App) CheckForUpdates() UpdateResponse {
-	// 1. Request latest release metadata from GitHub API
-	resp, err := http.Get("https://api.github.com/repos/BySnowden/Glacier/releases/latest")
+	// 1. Request latest release metadata from GitHub API with timeout
+	client := &http.Client{Timeout: UPDATE_CHECK_TIMEOUT}
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", GITHUB_OWNER, GITHUB_REPO)
+	resp, err := client.Get(apiURL)
 	if err != nil {
-		return UpdateResponse{false, "", ""}
+		return UpdateResponse{false, "", "", fmt.Sprintf("Failed to check for updates: %v", err)}
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return UpdateResponse{false, "", "", fmt.Sprintf("GitHub API returned status: %d", resp.StatusCode)}
+	}
 
 	// 2. Parse JSON response
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return UpdateResponse{false, "", ""}
+		return UpdateResponse{false, "", "", fmt.Sprintf("Failed to parse update response: %v", err)}
 	}
 
 	tagName, ok := result["tag_name"].(string)
 	if !ok {
-		return UpdateResponse{false, "", ""}
+		return UpdateResponse{false, "", "", "Invalid release data from GitHub"}
 	}
 	cleanTag := strings.TrimPrefix(tagName, "v")
 
@@ -99,6 +126,7 @@ func (a *App) CheckForUpdates() UpdateResponse {
 		// Fallback: If no exe found in assets, link to the release page
 		if downloadUrl == "" {
 			downloadUrl, _ = result["html_url"].(string)
+			return UpdateResponse{false, "", "", "No executable found in latest release"}
 		}
 
 		return UpdateResponse{
@@ -108,51 +136,124 @@ func (a *App) CheckForUpdates() UpdateResponse {
 		}
 	}
 
-	return UpdateResponse{false, AppVersion, ""}
+	return UpdateResponse{false, AppVersion, "", ""}
 }
 
 // DownloadAndInstall downloads the update and runs the installer
 func (a *App) DownloadAndInstall(url string) error {
+	runtime.EventsEmit(a.ctx, "update-progress", UpdateProgress{
+		Stage:      "preparing",
+		Percentage: 0,
+		Message:    "Preparing to download update...",
+	})
+
 	// 1. Create a temp file
 	tempFile, err := os.CreateTemp("", "Glacier-Update-*.exe")
 	if err != nil {
+		runtime.EventsEmit(a.ctx, "update-error", fmt.Sprintf("Failed to create temp file: %v", err))
 		return err
 	}
-	defer tempFile.Close()
+	tempPath := tempFile.Name()
+	tempFile.Close() // Close immediately, we'll reopen for writing
 
-	// 2. Get the data
-	resp, err := http.Get(url)
+	// 2. Download with timeout
+	runtime.EventsEmit(a.ctx, "update-progress", UpdateProgress{
+		Stage:      "downloading",
+		Percentage: 0,
+		Message:    "Starting download...",
+	})
+
+	client := &http.Client{Timeout: DOWNLOAD_TIMEOUT}
+	resp, err := client.Get(url)
 	if err != nil {
+		os.Remove(tempPath)
+		runtime.EventsEmit(a.ctx, "update-error", fmt.Sprintf("Failed to start download: %v", err))
 		return err
 	}
 	defer resp.Body.Close()
 
-	// 3. Set up progress tracking
+	if resp.StatusCode != 200 {
+		os.Remove(tempPath)
+		runtime.EventsEmit(a.ctx, "update-error", fmt.Sprintf("Download failed with status: %d", resp.StatusCode))
+		return fmt.Errorf("download failed with status: %d", resp.StatusCode)
+	}
+
+	// 3. Reopen temp file for writing
+	tempFile, err = os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
+	if err != nil {
+		os.Remove(tempPath)
+		runtime.EventsEmit(a.ctx, "update-error", fmt.Sprintf("Failed to open temp file: %v", err))
+		return err
+	}
+
+	// 4. Copy with progress tracking
 	pw := &progressWriter{
 		total: uint64(resp.ContentLength),
 		ctx:   a.ctx,
 	}
 
-	// 4. Copy data from internet to file (with progress)
 	if _, err = io.Copy(io.MultiWriter(tempFile, pw), resp.Body); err != nil {
+		tempFile.Close()
+		os.Remove(tempPath)
+		runtime.EventsEmit(a.ctx, "update-error", fmt.Sprintf("Download failed: %v", err))
 		return err
 	}
 
-	// 5. Run the installer silently
-	// "cmd /C start ..." allows it to run detached so we can close this app safely
-	cmd := exec.Command("cmd", "/C", "start", tempFile.Name(), "/SILENT")
+	// 5. IMPORTANT: Close the file now so Windows releases the lock
+	tempFile.Close()
+
+	runtime.EventsEmit(a.ctx, "update-progress", UpdateProgress{
+		Stage:      "installing",
+		Percentage: 100,
+		Message:    "Starting installation...",
+	})
+
+	// 6. Run the installer with proper flags
+	cmd := exec.Command(tempPath, "/SILENT", "/SP-", "/NORESTART")
+
 	if err := cmd.Start(); err != nil {
+		os.Remove(tempPath)
+		runtime.EventsEmit(a.ctx, "update-error", fmt.Sprintf("Failed to start installer: %v", err))
 		return err
 	}
 
-	// 6. Kill this app so the installer can overwrite files
-	runtime.Quit(a.ctx)
+	// 7. Give installer a moment to start, then quit
+	go func() {
+		time.Sleep(2 * time.Second)
+		runtime.Quit(a.ctx)
+	}()
+
 	return nil
 }
 
 // TriggerUpdate opens the download URL in the user's default browser (Manual Fallback)
 func (a *App) TriggerUpdate(url string) {
 	runtime.BrowserOpenURL(a.ctx, url)
+}
+
+// GetAppVersion returns the current application version
+func (a *App) GetAppVersion() string {
+	return AppVersion
+}
+
+// RestartApp restarts the application (useful after updates)
+func (a *App) RestartApp() error {
+	// Get the current executable path
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+
+	// Start new instance
+	cmd := exec.Command(executable)
+	err = cmd.Start()
+	if err != nil {
+		return err
+	}
+
+	// Quit current instance
+	runtime.Quit(a.ctx)
+	return nil
 }
 
 func (a *App) SelectModFolder() string {

@@ -5,9 +5,10 @@
         ScanMods,
         ValidateMods,
         CheckForUpdates,
-        DownloadAndInstall, // Added this
+        DownloadAndInstall,
+        GetAppVersion,
     } from "../wailsjs/go/main/App";
-    import { EventsOn } from "../wailsjs/runtime/runtime"; // Added this
+    import * as runtime from "../wailsjs/runtime/runtime";
     import { onMount } from "svelte";
 
     // Import the custom logo
@@ -33,8 +34,12 @@
     let latestVersion = "";
     let updateUrl = "";
     let isCheckingUpdate = false;
-    let isDownloading = false; // Added this
-    let downloadProgress = 0; // Added this
+    let isDownloading = false;
+    let downloadProgress = 0;
+    let updateError = "";
+    let updateStage = "";
+    let updateMessage = "";
+    let currentVersion = "";
 
     let darkMode = true;
     let folderPath = "";
@@ -147,32 +152,86 @@
 
     async function checkForAppUpdates() {
         isCheckingUpdate = true;
+        updateError = "";
         try {
             const res = await CheckForUpdates();
-            if (res.updateAvailable) {
+            if (res.error) {
+                updateError = res.error;
+                console.error("Update check failed:", res.error);
+            } else if (res.updateAvailable) {
                 updateAvailable = true;
                 latestVersion = res.latestVersion;
                 updateUrl = res.downloadUrl;
             }
         } catch (err) {
+            updateError = "Failed to check for updates";
             console.error("Failed to check updates", err);
         }
         isCheckingUpdate = false;
     }
 
     async function handleUpdateClick() {
+        if (!updateAvailable && !updateError) {
+            await checkForAppUpdates();
+            return;
+        }
+
         if (!updateAvailable) return;
 
         isDownloading = true;
+        updateError = "";
+        downloadProgress = 0;
+        updateStage = "preparing";
+        updateMessage = "Preparing update...";
+
         try {
+            // Listen for progress events
+            const unsubscribeProgress = runtime.EventsOn(
+                "update-progress",
+                (data) => {
+                    downloadProgress = data.percentage;
+                    updateStage = data.stage;
+                    updateMessage = data.message;
+                },
+            );
+
+            const unsubscribeError = runtime.EventsOn(
+                "update-error",
+                (error) => {
+                    updateError = error;
+                    isDownloading = false;
+                    unsubscribeProgress();
+                    unsubscribeError();
+                },
+            );
+
             // This calls the Go function to download and install
             await DownloadAndInstall(updateUrl);
+
+            // If we reach here, the app should be quitting soon
+            updateMessage = "Update installed successfully. Restarting...";
         } catch (err) {
             console.error("Update failed", err);
+            updateError = "Update failed: " + err.message;
             isDownloading = false;
-            // Optionally alert user here
         }
     }
+
+    // Check for updates automatically on startup
+    onMount(async () => {
+        // Get current version
+        try {
+            currentVersion = await GetAppVersion();
+        } catch (err) {
+            console.error("Failed to get app version:", err);
+            currentVersion = "Unknown";
+        }
+
+        // Wait a bit before checking to let the app fully load
+        setTimeout(() => {
+            checkForAppUpdates();
+        }, 2000);
+    });
 
     async function pickFolder() {
         let path = await SelectModFolder();
@@ -245,27 +304,42 @@
             <div class="header-controls">
                 {#if isDownloading}
                     <div class="update-progress-container">
-                        <span class="progress-text"
-                            >Downloading... {downloadProgress}%</span
-                        >
+                        <span class="progress-text">{updateMessage}</span>
                         <div class="progress-bar-bg">
                             <div
                                 class="progress-bar-fill"
                                 style="width: {downloadProgress}%"
                             ></div>
                         </div>
+                        {#if updateStage === "downloading"}
+                            <span class="progress-percentage"
+                                >{downloadProgress}%</span
+                            >
+                        {/if}
                     </div>
                 {:else}
                     <button
-                        class="update-btn {updateAvailable ? 'available' : ''}"
+                        class="update-btn {updateAvailable
+                            ? 'available'
+                            : updateError
+                              ? 'error'
+                              : ''}"
                         on:click={handleUpdateClick}
-                        disabled={!updateAvailable}
-                        title={updateAvailable
-                            ? `Update available: ${latestVersion}`
-                            : "Glacier is up to date"}
+                        disabled={isCheckingUpdate}
+                        title={updateError
+                            ? updateError
+                            : updateAvailable
+                              ? `Update available: v${latestVersion} (current: v${currentVersion})`
+                              : isCheckingUpdate
+                                ? "Checking for updates..."
+                                : `Glacier is up to date (v${currentVersion})`}
                     >
                         {#if isCheckingUpdate}
                             <i class="fa-solid fa-circle-notch fa-spin"></i>
+                            <span>Checking...</span>
+                        {:else if updateError}
+                            <i class="fa-solid fa-exclamation-triangle"></i>
+                            <span>Check Again</span>
                         {:else if updateAvailable}
                             <i class="fa-solid fa-cloud-arrow-down"></i>
                             <span>Update v{latestVersion}</span>
@@ -851,18 +925,46 @@
         transform: translateY(-1px);
     }
 
+    .update-btn.error {
+        background: #ef4444;
+        color: white;
+        border-color: #ef4444;
+        opacity: 1;
+        cursor: pointer;
+        box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
+    }
+
+    .update-btn.error:hover {
+        background: #dc2626;
+        border-color: #dc2626;
+        transform: translateY(-1px);
+    }
+
     /* Progress Bar Styles */
     .update-progress-container {
-        width: 150px;
         display: flex;
         flex-direction: column;
         gap: 4px;
+        min-width: 250px;
+        position: relative;
     }
 
     .progress-text {
         font-size: 0.75rem;
         color: var(--muted-fg);
         text-align: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .progress-percentage {
+        position: absolute;
+        right: 0;
+        top: 0;
+        font-size: 0.7rem;
+        color: var(--primary);
+        font-weight: 600;
     }
 
     .progress-bar-bg {
@@ -875,8 +977,36 @@
 
     .progress-bar-fill {
         height: 100%;
-        background: var(--primary);
-        transition: width 0.2s ease;
+        background: linear-gradient(90deg, var(--primary), #3b82f6);
+        border-radius: inherit;
+        transition: width 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .progress-bar-fill::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(
+            90deg,
+            transparent,
+            rgba(255, 255, 255, 0.2),
+            transparent
+        );
+        animation: progress-shimmer 1.5s infinite;
+    }
+
+    @keyframes progress-shimmer {
+        0% {
+            transform: translateX(-100%);
+        }
+        100% {
+            transform: translateX(100%);
+        }
     }
 
     @keyframes pulse-green {
