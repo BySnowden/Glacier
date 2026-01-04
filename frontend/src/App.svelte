@@ -158,14 +158,27 @@
             if (res.error) {
                 updateError = res.error;
                 console.error("Update check failed:", res.error);
+                // Reset update state on error
+                updateAvailable = false;
+                latestVersion = "";
+                updateUrl = "";
             } else if (res.updateAvailable) {
                 updateAvailable = true;
                 latestVersion = res.latestVersion;
                 updateUrl = res.downloadUrl;
+            } else {
+                // No update available - reset state
+                updateAvailable = false;
+                latestVersion = res.latestVersion || currentVersion;
+                updateUrl = "";
             }
         } catch (err) {
             updateError = "Failed to check for updates";
             console.error("Failed to check updates", err);
+            // Reset update state on error
+            updateAvailable = false;
+            latestVersion = "";
+            updateUrl = "";
         }
         isCheckingUpdate = false;
     }
@@ -325,7 +338,8 @@
                               ? 'error'
                               : ''}"
                         on:click={handleUpdateClick}
-                        disabled={isCheckingUpdate}
+                        disabled={isCheckingUpdate ||
+                            (!updateAvailable && !updateError)}
                         title={updateError
                             ? updateError
                             : updateAvailable
@@ -938,6 +952,22 @@
         background: #dc2626;
         border-color: #dc2626;
         transform: translateY(-1px);
+    }
+
+    .update-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed !important;
+        background: transparent !important;
+        border-color: var(--card-border) !important;
+        color: var(--muted-fg) !important;
+        box-shadow: none !important;
+        animation: none !important;
+        transform: none !important;
+    }
+
+    .update-btn:disabled:hover {
+        transform: none !important;
+        filter: none !important;
     }
 
     /* Progress Bar Styles */
