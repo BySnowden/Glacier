@@ -21,7 +21,7 @@ func main() {
 	}
 
 	err = wails.Run(&options.App{
-		Title:            "Glacier",
+		Title:            "Glacier Mod Manager",
 		Width:            1024,
 		Height:           768,
 		WindowStartState: options.Maximised,
