@@ -1,302 +1,98 @@
 <script>
-    import Header from "./Header.svelte";
-    import {
-        SelectModFolder,
-        ScanMods,
-        ValidateMods,
-        CheckForUpdates,
-        DownloadAndInstall,
-        GetAppVersion,
-    } from "../wailsjs/go/main/App";
-    import * as runtime from "../wailsjs/runtime/runtime";
     import { onMount } from "svelte";
+    import Header from "./components/ui/Header.svelte";
+    import UpdateManager from "./components/ui/UpdateManager.svelte";
+    import ModControls from "./components/panels/ModControls.svelte";
+    import AlertPanel from "./components/panels/AlertPanel.svelte";
+    import StatsPanel from "./components/panels/StatsPanel.svelte";
+    import ModToolbar from "./components/ui/ModToolbar.svelte";
+    import ModCard from "./components/ui/ModCard.svelte";
 
-    // Import the custom logo
+    import {
+        darkMode,
+        folderPath,
+        rawMods,
+        filteredMods,
+        viewMode,
+        expandedMods,
+        targetLoader,
+        issues,
+        isChecking,
+        checkStatus,
+        IGNORED_DEPS,
+        toggleTheme,
+        toggleExpand,
+    } from "./stores/index.js";
+
+    import { ValidateMods } from "../wailsjs/go/main/App";
+    import * as runtime from "../wailsjs/runtime/runtime";
     import logoIcon from "./assets/images/icon-transparent.png";
 
-    function resetApp() {
-        folderPath = "";
-        rawMods = [];
-        status = "";
-        issues = [];
-        checkStatus = "";
-        expandedMods = new Set();
+    import { resetApp } from "./stores/index.js";
 
-        // Reset alerts to default so they show up again next time
-        showConflictAlert = true;
-        showDependencyAlert = true;
-        showSodiumAlert = true;
-        isAlertsOpen = true;
+    function openModrinthSearch(modName) {
+        const searchUrl = `https://modrinth.com/mods?q=${encodeURIComponent(modName)}`;
+        runtime.BrowserOpenURL(searchUrl);
     }
 
-    // --- UPDATE STATE ---
-    let updateAvailable = false;
-    let latestVersion = "";
-    let updateUrl = "";
-    let isCheckingUpdate = false;
-    let isDownloading = false;
-    let downloadProgress = 0;
-    let updateError = "";
-    let updateStage = "";
-    let updateMessage = "";
-    let currentVersion = "";
-
-    let darkMode = true;
-    let folderPath = "";
-    let rawMods = [];
-    let status = "";
-    let targetLoader = "Fabric";
-    let viewMode = "grid";
-
-    // --- FILTER & SEARCH ---
-    let searchQuery = "";
-    let sortBy = "name";
-    let filterBy = "all";
-
-    // --- COLLAPSIBLE SECTIONS ---
-    let isAlertsOpen = true;
-    let isStatsOpen = true;
-
-    // --- ALERT VISIBILITY STATE ---
-    let showConflictAlert = true;
-    let showDependencyAlert = true;
-    let showSodiumAlert = true;
-
-    // --- EXPANDED CARDS STATE ---
-    let expandedMods = new Set();
-
-    // --- DEPENDENCY CHECKER ---
-    let issues = [];
-    let isChecking = false;
-    let checkStatus = "";
-
-    // --- IGNORED DEPENDENCIES ---
-    const IGNORED_DEPS = new Set([
-        "fabric",
-        "fabricloader",
-        "minecraft",
-        "java",
-    ]);
-
-    // --- REACTIVE STATS ---
-    $: fabricCount = rawMods.filter((m) => m.loader === "Fabric").length;
-    $: forgeCount = rawMods.filter((m) => m.loader === "NeoForge").length;
-    $: conflictCount = targetLoader === "Fabric" ? forgeCount : fabricCount;
-    $: hasSodium = rawMods.some((m) => m.name.toLowerCase().includes("sodium"));
-
-    // Calculate total active alerts
-    $: activeAlertCount =
-        (conflictCount > 0 && showConflictAlert ? 1 : 0) +
-        (issues.length > 0 && showDependencyAlert ? 1 : 0) +
-        (hasSodium && showSodiumAlert ? 1 : 0);
-
-    // --- FILTER LOGIC ---
-    $: filteredMods = rawMods
-        .filter((mod) => {
-            const searchMatch =
-                mod.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                mod.fileName.toLowerCase().includes(searchQuery.toLowerCase());
-
-            let statusMatch = true;
-            const isConflict =
-                (targetLoader === "Fabric" && mod.loader === "NeoForge") ||
-                (targetLoader === "NeoForge" && mod.loader === "Fabric");
-
-            if (filterBy === "compatible") statusMatch = !isConflict;
-            if (filterBy === "incompatible") statusMatch = isConflict;
-
-            return searchMatch && statusMatch;
-        })
-        .sort((a, b) => {
-            if (sortBy === "name") return a.name.localeCompare(b.name);
-            if (sortBy === "loader") return a.loader.localeCompare(b.loader);
-            if (sortBy === "status") {
-                const isConflictA =
-                    targetLoader === "Fabric" && a.loader === "NeoForge";
-                const isConflictB =
-                    targetLoader === "Fabric" && b.loader === "NeoForge";
-                return isConflictA === isConflictB ? 0 : isConflictA ? -1 : 1;
-            }
-            return 0;
-        });
-
-    function toggleTheme() {
-        darkMode = !darkMode;
-        if (darkMode) document.body.classList.add("dark");
-        else document.body.classList.remove("dark");
+    function openCurseForgeSearch(modName) {
+        const searchUrl = `https://www.curseforge.com/minecraft/search?search=${encodeURIComponent(modName)}`;
+        runtime.BrowserOpenURL(searchUrl);
     }
 
-    function toggleExpand(fileName) {
-        const newSet = new Set(expandedMods);
-        if (newSet.has(fileName)) {
-            newSet.delete(fileName);
-        } else {
-            newSet.add(fileName);
-        }
-        expandedMods = newSet;
+    function openGitHub() {
+        runtime.BrowserOpenURL("https://github.com/BySnowden/Glacier");
     }
 
-    onMount(async () => {
-        if (darkMode) document.body.classList.add("dark");
-        document.addEventListener("contextmenu", (event) =>
-            event.preventDefault(),
-        );
-
-        // Listen for download progress from backend
-        EventsOn("update-progress", (percent) => {
-            downloadProgress = percent;
-        });
-
-        checkForAppUpdates();
-    });
-
-    async function checkForAppUpdates() {
-        isCheckingUpdate = true;
-        updateError = "";
-        try {
-            const res = await CheckForUpdates();
-            if (res.error) {
-                updateError = res.error;
-                console.error("Update check failed:", res.error);
-                // Reset update state on error
-                updateAvailable = false;
-                latestVersion = "";
-                updateUrl = "";
-            } else if (res.updateAvailable) {
-                updateAvailable = true;
-                latestVersion = res.latestVersion;
-                updateUrl = res.downloadUrl;
-            } else {
-                // No update available - reset state
-                updateAvailable = false;
-                latestVersion = res.latestVersion || currentVersion;
-                updateUrl = "";
-            }
-        } catch (err) {
-            updateError = "Failed to check for updates";
-            console.error("Failed to check updates", err);
-            // Reset update state on error
-            updateAvailable = false;
-            latestVersion = "";
-            updateUrl = "";
-        }
-        isCheckingUpdate = false;
+    function openKofi() {
+        runtime.BrowserOpenURL("https://ko-fi.com/bysnowden");
     }
 
-    async function handleUpdateClick() {
-        if (!updateAvailable && !updateError) {
-            await checkForAppUpdates();
+    // Dependency check function
+    async function runDependencyCheck() {
+        if (!$folderPath) {
+            console.log("No folder selected");
             return;
         }
 
-        if (!updateAvailable) return;
-
-        isDownloading = true;
-        updateError = "";
-        downloadProgress = 0;
-        updateStage = "preparing";
-        updateMessage = "Preparing update...";
+        isChecking.set(true);
+        checkStatus.set("checking");
 
         try {
-            // Listen for progress events
-            const unsubscribeProgress = runtime.EventsOn(
-                "update-progress",
-                (data) => {
-                    downloadProgress = data.percentage;
-                    updateStage = data.stage;
-                    updateMessage = data.message;
-                },
-            );
+            const allIssues = await ValidateMods($folderPath);
 
-            const unsubscribeError = runtime.EventsOn(
-                "update-error",
-                (error) => {
-                    updateError = error;
-                    isDownloading = false;
-                    unsubscribeProgress();
-                    unsubscribeError();
-                },
-            );
-
-            // This calls the Go function to download and install
-            await DownloadAndInstall(updateUrl);
-
-            // If we reach here, the app should be quitting soon
-            updateMessage = "Update installed successfully. Restarting...";
-        } catch (err) {
-            console.error("Update failed", err);
-            updateError = "Update failed: " + err.message;
-            isDownloading = false;
-        }
-    }
-
-    // Check for updates automatically on startup
-    onMount(async () => {
-        // Get current version
-        try {
-            currentVersion = await GetAppVersion();
-        } catch (err) {
-            console.error("Failed to get app version:", err);
-            currentVersion = "Unknown";
-        }
-
-        // Wait a bit before checking to let the app fully load
-        setTimeout(() => {
-            checkForAppUpdates();
-        }, 2000);
-    });
-
-    async function pickFolder() {
-        let path = await SelectModFolder();
-        if (path) {
-            folderPath = path;
-            handleScan();
-        }
-    }
-
-    async function handleScan() {
-        status = "Scanning...";
-        issues = [];
-        checkStatus = "";
-        expandedMods = new Set();
-
-        // RESET ALERTS
-        showConflictAlert = true;
-        showDependencyAlert = true;
-        showSodiumAlert = true;
-        isAlertsOpen = true;
-
-        try {
-            rawMods = await ScanMods(folderPath);
-            status = "";
-        } catch (err) {
-            status = "Error: " + err;
-        }
-    }
-
-    async function runDependencyCheck() {
-        if (!folderPath) return;
-        isChecking = true;
-        checkStatus = "";
-        issues = [];
-        showDependencyAlert = true;
-
-        try {
-            const allIssues = await ValidateMods(folderPath);
-
-            // Filter out the annoying environment dependencies
-            issues = allIssues.filter((issue) => {
+            // Filter out ignored dependencies
+            const filteredIssues = allIssues.filter((issue) => {
                 const dep = issue.MissingDep.toLowerCase();
                 return !IGNORED_DEPS.has(dep);
             });
 
-            checkStatus = issues.length === 0 ? "clean" : "issues";
-            if (issues.length > 0) isAlertsOpen = true;
-        } catch (err) {
-            console.error(err);
+            issues.set(filteredIssues);
+            checkStatus.set(filteredIssues.length > 0 ? "issues" : "clean");
+        } catch (error) {
+            console.error("Dependency check failed:", error);
+            checkStatus.set("error");
         }
-        isChecking = false;
+
+        isChecking.set(false);
     }
+
+    onMount(() => {
+        // Set initial theme
+        if (typeof document !== "undefined") {
+            document.documentElement.setAttribute(
+                "data-theme",
+                $darkMode ? "dark" : "light",
+            );
+            if ($darkMode) document.body.classList.add("dark");
+            else document.body.classList.remove("dark");
+        }
+
+        // Prevent context menu
+        document.addEventListener("contextmenu", (event) =>
+            event.preventDefault(),
+        );
+    });
 </script>
 
 <div class="app-container">
@@ -311,348 +107,62 @@
                 title="Reset and clear workspace"
             >
                 <img src={logoIcon} alt="Glacier Logo" class="logo-img" />
-                <h1>Glacier Mod Manager</h1>
+                <h1>Glacier</h1>
             </div>
-
             <div class="header-controls">
-                {#if isDownloading}
-                    <div class="update-progress-container">
-                        <span class="progress-text">{updateMessage}</span>
-                        <div class="progress-bar-bg">
-                            <div
-                                class="progress-bar-fill"
-                                style="width: {downloadProgress}%"
-                            ></div>
-                        </div>
-                        {#if updateStage === "downloading"}
-                            <span class="progress-percentage"
-                                >{downloadProgress}%</span
-                            >
-                        {/if}
-                    </div>
-                {:else}
-                    <button
-                        class="update-btn {updateAvailable
-                            ? 'available'
-                            : updateError
-                              ? 'error'
-                              : ''}"
-                        on:click={handleUpdateClick}
-                        disabled={isCheckingUpdate ||
-                            (!updateAvailable && !updateError)}
-                        title={updateError
-                            ? updateError
-                            : updateAvailable
-                              ? `Update available: v${latestVersion} (current: v${currentVersion})`
-                              : isCheckingUpdate
-                                ? "Checking for updates..."
-                                : `Glacier is up to date (v${currentVersion})`}
-                    >
-                        {#if isCheckingUpdate}
-                            <i class="fa-solid fa-circle-notch fa-spin"></i>
-                            <span>Checking...</span>
-                        {:else if updateError}
-                            <i class="fa-solid fa-exclamation-triangle"></i>
-                            <span>Check Again</span>
-                        {:else if updateAvailable}
-                            <i class="fa-solid fa-cloud-arrow-down"></i>
-                            <span>Update v{latestVersion}</span>
-                        {:else}
-                            <i class="fa-solid fa-check"></i>
-                            <span>Up to Date</span>
-                        {/if}
-                    </button>
-                {/if}
-
+                <UpdateManager />
                 <button class="theme-toggle" on:click={toggleTheme}>
-                    <i class="fa-solid {darkMode ? 'fa-sun' : 'fa-moon'}"></i>
-                    <span>{darkMode ? "Light Mode" : "Dark Mode"}</span>
+                    <i class="fa-solid {$darkMode ? 'fa-sun' : 'fa-moon'}"></i>
+                    <span>{$darkMode ? "Light" : "Dark"}</span>
                 </button>
             </div>
         </div>
     </header>
 
     <main>
-        <div class="controls-card">
-            <div class="control-col">
-                <label
-                    ><i class="fa-solid fa-crosshairs"></i> Target Loader</label
-                >
-                <div class="toggle-group">
-                    <button
-                        class="toggle-btn {targetLoader === 'Fabric'
-                            ? 'active fabric'
-                            : ''}"
-                        on:click={() => (targetLoader = "Fabric")}
-                    >
-                        Fabric
-                    </button>
-                    <button
-                        class="toggle-btn {targetLoader === 'NeoForge'
-                            ? 'active forge'
-                            : ''}"
-                        on:click={() => (targetLoader = "NeoForge")}
-                    >
-                        NeoForge
-                    </button>
-                </div>
-            </div>
+        <ModControls />
 
-            <div class="control-col wide">
-                <label
-                    ><i class="fa-regular fa-folder-open"></i> Mods Folder</label
-                >
-                <div class="input-group">
-                    <div class="path-display">
-                        {folderPath || "No folder selected..."}
-                    </div>
-                    <button class="btn btn-primary" on:click={pickFolder}
-                        >Select</button
-                    >
-                </div>
-            </div>
-        </div>
+        <AlertPanel />
 
-        {#if (conflictCount > 0 && showConflictAlert) || (issues.length > 0 && checkStatus === "issues" && showDependencyAlert) || (hasSodium && showSodiumAlert)}
-            <div class="section-container">
-                <button
-                    class="section-header-btn"
-                    on:click={() => (isAlertsOpen = !isAlertsOpen)}
-                >
-                    <div class="title-group">
-                        <i class="fa-solid fa-triangle-exclamation text-warning"
-                        ></i>
-                        <h3>Active Alerts ({activeAlertCount})</h3>
-                    </div>
-                    <i
-                        class="fa-solid {isAlertsOpen
-                            ? 'fa-chevron-up'
-                            : 'fa-chevron-down'}"
-                    ></i>
-                </button>
+        <StatsPanel />
 
-                {#if isAlertsOpen}
-                    <div class="alerts-body">
-                        {#if conflictCount > 0 && showConflictAlert}
-                            <div class="alert critical">
-                                <i class="fa-solid fa-circle-xmark icon"></i>
-                                <div class="content">
-                                    <h4>Incompatibility Detected</h4>
-                                    <p>
-                                        {conflictCount}
-                                        {targetLoader === "Fabric"
-                                            ? "NeoForge"
-                                            : "Fabric"} mods detected.
-                                    </p>
-                                </div>
-                                <button
-                                    class="close-alert"
-                                    on:click={() => (showConflictAlert = false)}
-                                    title="Dismiss"
-                                >
-                                    <i class="fa-solid fa-xmark"></i>
-                                </button>
-                            </div>
-                        {/if}
+        {#if $rawMods.length > 0}
+            <ModToolbar />
 
-                        {#if checkStatus === "issues" && showDependencyAlert}
-                            <div class="alert danger-list">
-                                <i class="fa-solid fa-puzzle-piece icon"></i>
-                                <div class="content">
-                                    <h4>
-                                        Missing Dependencies ({issues.length})
-                                    </h4>
-                                    <div class="issue-grid">
-                                        {#each issues as issue}
-                                            <div class="issue-item">
-                                                <span class="mod-name"
-                                                    >{issue.ModName}</span
-                                                >
-                                                <span class="arrow"
-                                                    ><i
-                                                        class="fa-solid fa-arrow-right-long"
-                                                    ></i></span
-                                                >
-                                                <span class="missing-dep"
-                                                    >{issue.MissingDep}</span
-                                                >
-                                            </div>
-                                        {/each}
-                                    </div>
-                                </div>
-                                <button
-                                    class="close-alert"
-                                    on:click={() =>
-                                        (showDependencyAlert = false)}
-                                    title="Dismiss"
-                                >
-                                    <i class="fa-solid fa-xmark"></i>
-                                </button>
-                            </div>
-                        {/if}
-
-                        {#if hasSodium && showSodiumAlert}
-                            <div class="alert warning">
-                                <i class="fa-solid fa-triangle-exclamation icon"
-                                ></i>
-                                <div class="content">
-                                    <h4>Sodium Detected</h4>
-                                    <p>Check for OptiFine conflicts.</p>
-                                </div>
-                                <button
-                                    class="close-alert"
-                                    on:click={() => (showSodiumAlert = false)}
-                                    title="Dismiss"
-                                >
-                                    <i class="fa-solid fa-xmark"></i>
-                                </button>
-                            </div>
-                        {/if}
-                    </div>
-                {/if}
-            </div>
-        {/if}
-
-        {#if rawMods.length > 0}
-            <div class="section-container">
-                <button
-                    class="section-header-btn"
-                    on:click={() => (isStatsOpen = !isStatsOpen)}
-                >
-                    <div class="title-group">
-                        <i class="fa-solid fa-chart-simple text-blue"></i>
-                        <h3>Quick Stats</h3>
-                    </div>
-                    <i
-                        class="fa-solid {isStatsOpen
-                            ? 'fa-chevron-up'
-                            : 'fa-chevron-down'}"
-                    ></i>
-                </button>
-
-                {#if isStatsOpen}
-                    <div class="stats-bar">
-                        <div class="stat-group">
-                            <div class="stat-box">
-                                <i class="fa-solid fa-cube"></i>
-                                <div class="stat-info">
-                                    <span class="val">{rawMods.length}</span>
-                                    <span class="label">Total</span>
-                                </div>
-                            </div>
-                            <div class="stat-box success">
-                                <i class="fa-solid fa-check"></i>
-                                <div class="stat-info">
-                                    <span class="val"
-                                        >{rawMods.length - conflictCount}</span
-                                    >
-                                    <span class="label">Safe</span>
-                                </div>
-                            </div>
-                            {#if conflictCount > 0}
-                                <div class="stat-box danger">
-                                    <i class="fa-solid fa-xmark"></i>
-                                    <div class="stat-info">
-                                        <span class="val">{conflictCount}</span>
-                                        <span class="label">Conflicts</span>
-                                    </div>
-                                </div>
-                            {/if}
-                        </div>
-
-                        <button
-                            class="btn btn-secondary check-btn"
-                            on:click={runDependencyCheck}
-                            disabled={isChecking}
-                        >
-                            {#if isChecking}
-                                <i class="fa-solid fa-spinner fa-spin"></i> Checking...
-                            {:else}
-                                <i class="fa-solid fa-shield-halved"></i> Validate
-                            {/if}
-                        </button>
-                    </div>
-                {/if}
-            </div>
-
-            <div class="toolbar">
-                <div class="search-box">
-                    <i class="fa-solid fa-magnifying-glass"></i>
-                    <input
-                        type="text"
-                        placeholder="Search mods..."
-                        bind:value={searchQuery}
-                    />
-                </div>
-
-                <div class="filter-group">
-                    <div class="select-wrapper">
-                        <i class="fa-solid fa-filter"></i>
-                        <select bind:value={filterBy}>
-                            <option value="all">All</option>
-                            <option value="compatible">Compatible</option>
-                            <option value="incompatible">Conflicts</option>
-                        </select>
-                    </div>
-
-                    <div class="select-wrapper">
-                        <i class="fa-solid fa-arrow-down-a-z"></i>
-                        <select bind:value={sortBy}>
-                            <option value="name">Name</option>
-                            <option value="loader">Loader</option>
-                            <option value="status">Status</option>
-                        </select>
-                    </div>
-
-                    <button
-                        class="view-toggle-btn"
-                        on:click={() =>
-                            (viewMode = viewMode === "grid" ? "list" : "grid")}
-                    >
-                        <i
-                            class="fa-solid {viewMode === 'grid'
-                                ? 'fa-list'
-                                : 'fa-border-all'}"
-                        ></i>
-                    </button>
-                </div>
-            </div>
-
-            <div class="grid {viewMode === 'list' ? 'list-view' : ''}">
-                {#each filteredMods as mod (mod.fileName)}
-                    {@const isConflict =
-                        (targetLoader === "Fabric" &&
-                            mod.loader === "NeoForge") ||
-                        (targetLoader === "NeoForge" &&
-                            mod.loader === "Fabric")}
-                    {@const isExpanded = expandedMods.has(mod.fileName)}
-
+            <div class="grid {$viewMode === 'list' ? 'list-view' : ''}">
+                {#each $filteredMods as mod (mod.fileName)}
+                    {@const isExpanded = $expandedMods.has(mod.fileName)}
                     <div
-                        class="mod-card {isConflict
+                        class="mod-card {mod.loader.toLowerCase()} {$targetLoader &&
+                        mod.loader !== $targetLoader
                             ? 'conflict'
-                            : ''} {mod.loader.toLowerCase()} {isExpanded
-                            ? 'expanded'
                             : ''}"
+                        class:expanded={isExpanded}
                     >
-                        {#if viewMode === "grid"}
+                        {#if $viewMode === "grid"}
                             <div class="card-header-grid">
                                 <h3 class="mod-title" title={mod.name}>
                                     {mod.name}
                                 </h3>
-                                <span class="version-pill">{mod.version}</span>
+                                <span class="version-pill">v{mod.version}</span>
                             </div>
 
                             <div class="card-badges">
-                                <span class="badge {mod.loader.toLowerCase()}"
-                                    >{mod.loader}</span
+                                <span
+                                    class="badge {mod.loader.toLowerCase()}"
+                                    title="Mod Loader"
                                 >
+                                    {mod.loader}
+                                </span>
                             </div>
 
-                            {#if isConflict}
+                            {#if $targetLoader && mod.loader !== $targetLoader}
                                 <div class="error-message">
-                                    <i class="fa-solid fa-triangle-exclamation"
+                                    <i
+                                        class="fa-solid fa-triangle-exclamation"
+                                        style="margin-right: 8px;"
                                     ></i>
-                                    Incompatible with {targetLoader}
+                                    Incompatible with {$targetLoader}
                                 </div>
                             {/if}
 
@@ -660,37 +170,37 @@
                                 class="mod-description {isExpanded
                                     ? ''
                                     : 'clamp-desc'}"
-                                title={mod.description}
                             >
-                                {mod.description || "No description provided."}
+                                {mod.description || "No description available."}
                             </p>
 
                             <button
                                 class="show-more-btn"
-                                on:click|stopPropagation={() =>
-                                    toggleExpand(mod.fileName)}
+                                on:click={() => toggleExpand(mod.fileName)}
                             >
-                                {isExpanded ? "Show Less" : "Show More"}
+                                {isExpanded ? "Show Less ▲" : "Show More ▼"}
                             </button>
 
                             <div class="card-footer-grid">
                                 <div class="ext-links">
-                                    <a
-                                        href="https://modrinth.com/mods?q={mod.name}"
-                                        target="_blank"
+                                    <button
                                         class="ext-btn-text"
-                                        title="Search Modrinth"
+                                        title="Search on Modrinth"
+                                        on:click={() =>
+                                            openModrinthSearch(mod.name)}
                                     >
-                                        <i class="fa-solid fa-hammer"></i> Modrinth
-                                    </a>
-                                    <a
-                                        href="https://www.curseforge.com/minecraft/search?search={mod.name}"
-                                        target="_blank"
+                                        <i class="fa-solid fa-hammer"></i>
+                                        Modrinth
+                                    </button>
+                                    <button
                                         class="ext-btn-text"
-                                        title="Search CurseForge"
+                                        title="Search on CurseForge"
+                                        on:click={() =>
+                                            openCurseForgeSearch(mod.name)}
                                     >
-                                        <i class="fa-solid fa-fire"></i> CurseForge
-                                    </a>
+                                        <i class="fa-solid fa-fire"></i>
+                                        CurseForge
+                                    </button>
                                 </div>
                             </div>
 
@@ -708,18 +218,26 @@
                                 <div>
                                     <span
                                         class="badge {mod.loader.toLowerCase()}"
-                                        >{mod.loader}</span
+                                        title="Mod Loader"
                                     >
-                                    <span class="version-pill"
-                                        >{mod.version}</span
-                                    >
-                                    {#if isConflict}
-                                        <span class="status-badge conflict"
-                                            >Conflict</span
+                                        {mod.loader}
+                                    </span>
+                                    <span class="version-pill" title="Version">
+                                        v{mod.version}
+                                    </span>
+                                    {#if $targetLoader && mod.loader !== $targetLoader}
+                                        <span
+                                            class="status-badge conflict"
+                                            title="Loader Conflict"
                                         >
-                                        <span class="status-badge incompatible"
-                                            >Incompatible</span
+                                            Conflict
+                                        </span>
+                                        <span
+                                            class="status-badge incompatible"
+                                            title="Incompatible"
                                         >
+                                            Incompatible
+                                        </span>
                                     {/if}
                                 </div>
                             </div>
@@ -727,27 +245,29 @@
                             <div class="col-desc">
                                 <p class="mod-description truncate-list">
                                     {mod.description ||
-                                        "No description provided."}
+                                        "No description available."}
                                 </p>
                             </div>
 
                             <div class="col-actions">
-                                <a
-                                    href="https://modrinth.com/mods?q={mod.name}"
-                                    target="_blank"
+                                <button
                                     class="ext-btn-text small"
-                                    title="Search Modrinth"
+                                    title="Search on Modrinth"
+                                    on:click={() =>
+                                        openModrinthSearch(mod.name)}
                                 >
-                                    <i class="fa-solid fa-hammer"></i> Modrinth
-                                </a>
-                                <a
-                                    href="https://www.curseforge.com/minecraft/search?search={mod.name}"
-                                    target="_blank"
+                                    <i class="fa-solid fa-hammer"></i>
+                                    Modrinth
+                                </button>
+                                <button
                                     class="ext-btn-text small"
-                                    title="Search CurseForge"
+                                    title="Search on CurseForge"
+                                    on:click={() =>
+                                        openCurseForgeSearch(mod.name)}
                                 >
-                                    <i class="fa-solid fa-fire"></i> CurseForge
-                                </a>
+                                    <i class="fa-solid fa-fire"></i>
+                                    CurseForge
+                                </button>
                             </div>
                         {/if}
                     </div>
@@ -755,50 +275,55 @@
             </div>
 
             <div class="footer-count">
-                Showing {filteredMods.length} of {rawMods.length} mods
+                Showing {$filteredMods.length} of {$rawMods.length} mods
             </div>
         {:else}
             <div class="empty-state">
                 <div class="icon-container">
                     <i class="fa-solid fa-gears"></i>
                 </div>
-
-                <h2>It's looking a little empty here...</h2>
-                <p>Select your mods folder above to get started!</p>
+                <h2>No Mods Found</h2>
+                <p>Select a folder and scan for mods to get started.</p>
             </div>
         {/if}
     </main>
 
     <footer>
         <div class="footer-content">
-            <span class="copyright">© 2026 BySnowden</span>
+            <span class="copyright">© 2026 Glacier Mod Manager</span>
             <div class="social-links">
-                <a
-                    href="https://github.com/BySnowden"
-                    target="_blank"
+                <button
                     class="social-btn github"
+                    title="GitHub Repository"
+                    on:click={openGitHub}
                 >
-                    <i class="fa-brands fa-github"></i>
-                </a>
-                <a
-                    href="https://ko-fi.com/bysnowden"
-                    target="_blank"
+                    <i class="fab fa-github"></i>
+                </button>
+                <button
                     class="social-btn kofi"
+                    title="Support on Ko-fi"
+                    on:click={openKofi}
                 >
-                    <i class="fa-solid fa-mug-hot"></i> Support
-                </a>
+                    <i class="fas fa-coffee"></i>
+                </button>
             </div>
         </div>
     </footer>
 </div>
 
 <style>
-    /* ============================================
-      GLOBAL RESETS & BASE STYLES
-      ============================================ */
+    /* Global styles */
     :global(body) {
-        user-select: none;
-        cursor: default;
+        margin: 0;
+        font-family:
+            "Inter",
+            -apple-system,
+            BlinkMacSystemFont,
+            "Segoe UI",
+            system-ui,
+            sans-serif;
+        background: var(--background);
+        color: var(--foreground);
     }
 
     .path-display,
@@ -807,19 +332,18 @@
     .filename-grid,
     .filename-list,
     .mod-description {
-        user-select: text;
-        cursor: text;
+        word-break: break-word;
+        overflow-wrap: break-word;
+        hyphens: auto;
     }
 
     button,
-    select,
     a {
-        cursor: pointer;
+        font-family: inherit;
+        transition: all 0.2s ease;
     }
 
-    /* ============================================
-      LAYOUT - MAIN CONTAINER
-      ============================================ */
+    /* Main layout */
     .app-container {
         min-height: 100vh;
         display: flex;
@@ -828,28 +352,25 @@
     }
 
     main {
+        flex: 1;
+        padding: 20px;
         max-width: 1200px;
         margin: 0 auto;
-        padding: 20px;
         width: 100%;
         box-sizing: border-box;
-        flex: 1;
     }
 
-    /* ============================================
-      HEADER
-      ============================================ */
+    /* Header styles */
     header {
         background: var(--card);
         border-bottom: 1px solid var(--card-border);
-        padding: 16px 0;
-        margin-bottom: 24px;
+        padding: 16px 20px;
+        margin-bottom: 20px;
     }
 
     .header-content {
         max-width: 1200px;
         margin: 0 auto;
-        padding: 0 20px;
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -857,8 +378,8 @@
 
     .header-controls {
         display: flex;
-        gap: 12px;
         align-items: center;
+        gap: 16px;
     }
 
     .logo-section {
@@ -867,11 +388,13 @@
         gap: 12px;
         cursor: pointer;
         user-select: none;
-        transition: opacity 0.2s;
+        padding: 8px 12px;
+        border-radius: 8px;
+        transition: all 0.2s ease;
     }
 
     .logo-section:hover {
-        opacity: 0.8;
+        background: var(--muted);
     }
 
     .logo-section:active {
@@ -879,9 +402,13 @@
     }
 
     .logo-img {
+        width: 32px;
         height: 32px;
-        width: auto;
         object-fit: contain;
+        background: var(--primary);
+        border-radius: 8px;
+        padding: 6px;
+        box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);
     }
 
     h1 {
@@ -891,636 +418,81 @@
     }
 
     .theme-toggle {
-        background: transparent;
+        background: var(--card);
         border: 1px solid var(--card-border);
-        color: var(--muted-fg);
-        padding: 8px 16px;
-        border-radius: 6px;
-        font-weight: 600;
+        color: var(--foreground);
+        padding: 8px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 0.85rem;
         display: flex;
         align-items: center;
-        gap: 8px;
-        transition: all 0.2s;
+        gap: 6px;
+        transition: all 0.2s ease;
     }
 
     .theme-toggle:hover {
-        background: var(--card-border);
-        color: var(--foreground);
-    }
-
-    /* Update Button Styles */
-    .update-btn {
-        background: transparent;
-        border: 1px solid var(--card-border);
-        color: var(--muted-fg);
-        padding: 8px 16px;
-        border-radius: 6px;
-        font-weight: 600;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        transition: all 0.3s ease;
-        opacity: 0.5; /* Faded out by default */
-        cursor: default;
-    }
-
-    .update-btn.available {
-        background: var(--primary); /* Or use #22c55e for a specific green */
-        color: white; /* Force white text on green button */
-        border-color: var(--primary);
-        opacity: 1;
-        cursor: pointer;
-        box-shadow: 0 0 10px rgba(var(--primary-rgb), 0.4);
-        animation: pulse-green 2s infinite;
-    }
-
-    .update-btn.available:hover {
-        filter: brightness(1.1);
-        transform: translateY(-1px);
-    }
-
-    .update-btn.error {
-        background: #ef4444;
-        color: white;
-        border-color: #ef4444;
-        opacity: 1;
-        cursor: pointer;
-        box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
-    }
-
-    .update-btn.error:hover {
-        background: #dc2626;
-        border-color: #dc2626;
-        transform: translateY(-1px);
-    }
-
-    .update-btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed !important;
-        background: transparent !important;
-        border-color: var(--card-border) !important;
-        color: var(--muted-fg) !important;
-        box-shadow: none !important;
-        animation: none !important;
-        transform: none !important;
-    }
-
-    .update-btn:disabled:hover {
-        transform: none !important;
-        filter: none !important;
-    }
-
-    /* Progress Bar Styles */
-    .update-progress-container {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        min-width: 250px;
-        position: relative;
-    }
-
-    .progress-text {
-        font-size: 0.75rem;
-        color: var(--muted-fg);
-        text-align: center;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    .progress-percentage {
-        position: absolute;
-        right: 0;
-        top: 0;
-        font-size: 0.7rem;
-        color: var(--primary);
-        font-weight: 600;
-    }
-
-    .progress-bar-bg {
-        width: 100%;
-        height: 6px;
-        background: var(--card-border);
-        border-radius: 3px;
-        overflow: hidden;
-    }
-
-    .progress-bar-fill {
-        height: 100%;
-        background: linear-gradient(90deg, var(--primary), #3b82f6);
-        border-radius: inherit;
-        transition: width 0.3s ease;
-        position: relative;
-        overflow: hidden;
-    }
-
-    .progress-bar-fill::after {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: linear-gradient(
-            90deg,
-            transparent,
-            rgba(255, 255, 255, 0.2),
-            transparent
-        );
-        animation: progress-shimmer 1.5s infinite;
-    }
-
-    @keyframes progress-shimmer {
-        0% {
-            transform: translateX(-100%);
-        }
-        100% {
-            transform: translateX(100%);
-        }
-    }
-
-    @keyframes pulse-green {
-        0% {
-            box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
-        }
-        70% {
-            box-shadow: 0 0 0 6px rgba(34, 197, 94, 0);
-        }
-        100% {
-            box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
-        }
-    }
-
-    /* ============================================
-      CONTROLS CARD
-      ============================================ */
-    .controls-card {
-        background: var(--card);
-        border: 1px solid var(--card-border);
-        border-radius: 8px;
-        padding: 20px;
-        display: flex;
-        gap: 24px;
-        margin-bottom: 20px;
-    }
-
-    .control-col {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    }
-
-    .control-col.wide {
-        flex: 2;
-    }
-
-    label {
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: var(--muted-fg);
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }
-
-    .toggle-group {
-        display: flex;
-        background: var(--background);
-        padding: 4px;
-        border-radius: 6px;
-        border: 1px solid var(--card-border);
-    }
-
-    .toggle-btn {
-        flex: 1;
-        padding: 8px;
-        border: none;
-        background: transparent;
-        color: var(--muted-fg);
-        font-weight: 600;
-        border-radius: 4px;
-        transition: all 0.2s;
-    }
-
-    .toggle-btn.active {
-        background: var(--card);
-        color: var(--foreground);
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-    }
-
-    .toggle-btn.active.fabric {
-        color: var(--primary);
-    }
-
-    .toggle-btn.active.forge {
-        color: #f97316;
-    }
-
-    .input-group {
-        display: flex;
-        gap: 10px;
-    }
-
-    .path-display {
-        flex: 1;
-        background: var(--background);
-        border: 1px solid var(--card-border);
-        padding: 8px 12px;
-        border-radius: 6px;
-        font-family: monospace;
-        font-size: 0.9em;
-        color: var(--muted-fg);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    .btn-primary {
-        background: var(--primary);
-        color: white;
-        border: none;
-        padding: 0 16px;
-        border-radius: 6px;
-        font-weight: 600;
-    }
-
-    /* ============================================
-      COLLAPSIBLE SECTIONS
-      ============================================ */
-    .section-container {
-        background: var(--card);
-        border: 1px solid var(--card-border);
-        border-radius: 8px;
-        margin-bottom: 20px;
-        overflow: hidden;
-    }
-
-    .section-header-btn {
-        width: 100%;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 12px 20px;
-        background: transparent;
-        border: none;
-        color: var(--foreground);
-        font-size: 1rem;
-        border-bottom: 1px solid transparent;
-        transition: background 0.2s;
-    }
-
-    .section-header-btn:hover {
-        background: rgba(255, 255, 255, 0.02);
-    }
-
-    .title-group {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-
-    .title-group h3 {
-        margin: 0;
-        font-size: 0.95rem;
-        font-weight: 600;
-    }
-
-    /* ============================================
-      ALERTS SECTION
-      ============================================ */
-    .alerts-body {
-        padding: 16px;
-        border-top: 1px solid var(--card-border);
-    }
-
-    .alert {
-        padding: 12px;
-        padding-right: 40px;
-        border-radius: 6px;
-        display: flex;
-        gap: 12px;
-        margin-bottom: 8px;
-        position: relative;
-    }
-
-    .alert:last-child {
-        margin-bottom: 0;
-    }
-
-    .alert.critical {
-        background: var(--alert-critical-bg);
-        border: 1px solid var(--alert-critical-border);
-        color: var(--alert-critical-text);
-    }
-
-    .alert.warning {
-        background: var(--alert-warning-bg);
-        border: 1px solid var(--alert-warning-border);
-        color: var(--alert-warning-text);
-    }
-
-    .alert.danger-list {
-        background: var(--alert-critical-bg);
-        border: 1px solid var(--alert-critical-border);
-        color: var(--alert-critical-text);
-    }
-
-    .alert .icon {
-        font-size: 1.1rem;
-        margin-top: 2px;
-    }
-
-    .alert h4 {
-        margin: 0 0 4px 0;
-        font-size: 0.95rem;
-        font-weight: 700;
-        color: inherit;
-    }
-
-    .alert p {
-        margin: 0;
-        font-size: 0.85rem;
-        opacity: 1;
-        color: inherit;
-    }
-
-    .close-alert {
-        position: absolute;
-        top: 10px;
-        right: 10px;
-        background: transparent;
-        border: none;
-        color: inherit;
-        opacity: 0.6;
-        padding: 4px;
-        font-size: 1rem;
-        cursor: pointer;
-        transition: opacity 0.2s;
-    }
-
-    .close-alert:hover {
-        opacity: 1;
-    }
-
-    /* ============================================
-      ISSUE GRID (ALERTS SUBSECTION)
-      ============================================ */
-    .issue-grid {
-        display: grid;
-        gap: 6px;
-        margin-top: 8px;
-    }
-
-    .issue-item {
-        background: rgba(0, 0, 0, 0.1);
-        padding: 8px 12px;
-        border-radius: 4px;
-        font-size: 0.85rem;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        border: 1px solid var(--alert-critical-border);
-    }
-
-    .mod-name {
-        font-weight: bold;
-        color: var(--alert-critical-text);
-    }
-
-    .missing-dep {
-        color: var(--alert-critical-text);
-        font-weight: bold;
-    }
-
-    .issue-item .arrow {
-        color: var(--alert-critical-text);
-        opacity: 0.6;
-    }
-
-    /* ============================================
-      STATS BAR
-      ============================================ */
-    .stats-bar {
-        padding: 16px;
-        border-top: 1px solid var(--card-border);
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-
-    .stat-group {
-        display: flex;
-        gap: 20px;
-    }
-
-    .stat-box {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-
-    .stat-box i {
-        font-size: 1.2rem;
-        color: var(--muted-fg);
-    }
-
-    .stat-box.success i {
-        color: var(--success);
-    }
-
-    .stat-box.danger i {
-        color: var(--destructive);
-    }
-
-    .stat-info {
-        display: flex;
-        flex-direction: column;
-        line-height: 1.1;
-    }
-
-    .stat-info .val {
-        font-weight: 700;
-        font-size: 1.1rem;
-    }
-
-    .stat-info .label {
-        font-size: 0.75rem;
-        color: var(--muted-fg);
-        text-transform: uppercase;
-        font-weight: 600;
-    }
-
-    .btn-secondary {
-        background: var(--background);
-        border: 1px solid var(--card-border);
-        color: var(--foreground);
-        padding: 8px 16px;
-        border-radius: 6px;
-        font-weight: 600;
-        transition: all 0.2s;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
-    .btn-secondary:hover:not(:disabled) {
-        border-color: var(--primary);
-        color: var(--primary);
-    }
-
-    /* ============================================
-      TOOLBAR & FILTERS
-      ============================================ */
-    .toolbar {
-        display: flex;
-        gap: 16px;
-        margin-bottom: 16px;
-        align-items: center;
-    }
-
-    .search-box {
-        flex: 1;
-        position: relative;
-    }
-
-    .search-box i {
-        position: absolute;
-        left: 12px;
-        top: 50%;
-        transform: translateY(-50%);
-        color: var(--muted-fg);
-        font-size: 0.9rem;
-    }
-
-    .search-box input {
-        width: 100%;
-        background: var(--card);
-        border: 1px solid var(--card-border);
-        padding: 10px 10px 10px 36px;
-        border-radius: 6px;
-        color: var(--foreground);
-        outline: none;
-        box-sizing: border-box;
-    }
-
-    .search-box input:focus {
+        background: var(--muted);
         border-color: var(--primary);
     }
 
-    .filter-group {
-        display: flex;
-        gap: 10px;
-    }
-
-    .select-wrapper {
-        position: relative;
-    }
-
-    .select-wrapper i {
-        position: absolute;
-        left: 10px;
-        top: 50%;
-        transform: translateY(-50%);
-        color: var(--muted-fg);
-        font-size: 0.8rem;
-        pointer-events: none;
-    }
-
-    select {
-        background: var(--card);
-        border: 1px solid var(--card-border);
-        color: var(--foreground);
-        padding: 9px 12px 9px 30px;
-        border-radius: 6px;
-        outline: none;
-        appearance: none;
-        font-size: 0.9rem;
-        cursor: pointer;
-    }
-
-    select:hover {
-        border-color: var(--muted-fg);
-    }
-
-    .view-toggle-btn {
-        width: 38px;
-        background: var(--card);
-        border: 1px solid var(--card-border);
-        color: var(--muted-fg);
-        border-radius: 6px;
-        font-size: 1rem;
-        display: grid;
-        place-items: center;
-    }
-
-    .view-toggle-btn:hover {
-        color: var(--foreground);
-        border-color: var(--muted-fg);
-    }
-
-    /* ============================================
-      BADGES & PILLS
-      ============================================ */
+    /* Mod grid styles */
     .version-pill {
-        font-size: 0.75rem;
+        background: var(--muted);
         color: var(--muted-fg);
-        font-family: monospace;
-        background: rgba(255, 255, 255, 0.05);
         padding: 4px 8px;
-        border-radius: 4px;
-        width: fit-content;
-        line-height: 1.2;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        border: 1px solid var(--card-border);
+        white-space: nowrap;
     }
 
     .badge {
-        font-size: 0.65rem;
         padding: 4px 8px;
-        border-radius: 3px;
-        font-weight: 700;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        width: fit-content;
-        line-height: 1.2;
+        white-space: nowrap;
     }
 
     .badge.fabric {
-        background: rgba(59, 130, 246, 0.2);
-        color: #60a5fa;
+        background: var(--fabric-bg);
+        color: var(--fabric-text);
     }
 
     .badge.neoforge {
-        background: rgba(249, 115, 22, 0.2);
-        color: #fb923c;
+        background: var(--forge-bg);
+        color: var(--forge-text);
     }
 
     .status-badge {
+        padding: 2px 6px;
+        border-radius: 3px;
         font-size: 0.65rem;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-weight: 700;
+        font-weight: 600;
         text-transform: uppercase;
-        white-space: nowrap;
-        display: inline-block;
+        letter-spacing: 0.5px;
     }
 
     .status-badge.conflict {
-        background: rgba(220, 38, 38, 0.2);
-        color: #f87171;
+        background: var(--destructive);
+        color: white;
     }
 
     .status-badge.incompatible {
-        background: rgba(220, 38, 38, 0.2);
-        color: #f87171;
+        background: var(--destructive);
+        color: white;
     }
 
-    /* ============================================
-      GRID SYSTEM
-      ============================================ */
+    /* Grid layout */
     .grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-        gap: 16px;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        gap: 20px;
+        margin-bottom: 24px;
     }
 
     .grid.list-view {
@@ -1530,63 +502,61 @@
 
     .grid.list-view .mod-card {
         display: grid;
-        grid-template-columns: 1fr;
-        align-items: stretch;
-        padding: 20px 24px;
-        gap: 12px;
-        min-height: 64px;
+        grid-template-columns: 2fr 3fr auto;
+        align-items: center;
+        gap: 20px;
+        padding: 16px 20px;
     }
 
-    /* ============================================
-      MOD CARD - BASE STYLES
-      ============================================ */
+    /* Mod card styles */
     .mod-card {
         background: var(--card);
         border: 1px solid var(--card-border);
-        border-radius: 8px;
+        border-radius: var(--radius);
         padding: 16px;
         display: flex;
         flex-direction: column;
-        transition:
-            transform 0.2s,
-            box-shadow 0.2s,
-            border-color 0.2s;
-        position: relative;
-        overflow: hidden;
         gap: 12px;
+        transition: all 0.2s ease;
+        position: relative;
     }
 
     .mod-card:hover {
+        border-color: var(--primary);
         transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        border-color: var(--muted-fg);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
     }
 
     .mod-card.conflict {
         border-color: var(--destructive);
-        background: rgba(40, 0, 0, 0.2);
+        background: rgba(239, 68, 68, 0.05);
     }
 
-    /* ============================================
-      MOD CARD - TEXT CONTENT
-      ============================================ */
+    /* Card content styles */
     .mod-title {
-        font-size: 1rem;
         margin: 0;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        font-weight: 700;
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--foreground);
+        line-height: 1.3;
     }
 
     .mod-description {
-        font-size: 0.85rem;
         color: var(--muted-fg);
+        font-size: 0.9rem;
+        line-height: 1.5;
         margin: 0;
-        line-height: 1.4;
     }
 
     .mod-description.clamp-desc {
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .mod-description.truncate-list {
         display: -webkit-box;
         -webkit-line-clamp: 2;
         line-clamp: 2;
@@ -1594,35 +564,28 @@
         overflow: hidden;
     }
 
-    .mod-description.truncate-list {
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
     .show-more-btn {
-        background: transparent;
+        background: none;
         border: none;
         color: var(--primary);
-        font-size: 0.75rem;
+        font-size: 0.8rem;
         font-weight: 600;
-        padding: 0;
-        margin-top: -4px;
+        cursor: pointer;
+        padding: 4px 0;
         text-align: left;
-        width: fit-content;
+        align-self: flex-start;
     }
 
     .show-more-btn:hover {
         text-decoration: underline;
     }
 
-    /* ============================================
-      MOD CARD - GRID VIEW
-      ============================================ */
+    /* Grid view specific styles */
     .card-header-grid {
         display: flex;
         justify-content: space-between;
-        align-items: center;
+        align-items: flex-start;
+        gap: 12px;
     }
 
     .card-badges {
@@ -1631,12 +594,14 @@
     }
 
     .error-message {
+        color: var(--destructive);
+        font-size: 0.85rem;
+        font-weight: 500;
         display: flex;
         align-items: center;
-        gap: 6px;
-        color: #f87171;
-        font-size: 0.8rem;
-        font-weight: 600;
+        padding: 8px 12px;
+        background: rgba(239, 68, 68, 0.1);
+        border-radius: 6px;
     }
 
     .card-footer-grid {
@@ -1652,44 +617,41 @@
     }
 
     .filename-grid {
-        font-size: 0.7rem;
+        font-size: 0.75rem;
         color: var(--muted-fg);
-        opacity: 0.6;
+        font-family: "Courier New", monospace;
         display: flex;
         align-items: center;
-        gap: 4px;
+        gap: 6px;
+        padding: 8px 12px;
+        background: var(--muted);
+        border-radius: 6px;
         margin-top: 8px;
-        border-top: 1px solid var(--card-border);
-        padding-top: 8px;
     }
 
-    /* ============================================
-      MOD CARD - LIST VIEW
-      ============================================ */
+    /* List view specific styles */
     .col-title {
         display: flex;
         flex-direction: column;
-        align-items: flex-start;
         gap: 8px;
-        overflow: hidden;
-        flex: 1;
+        align-items: flex-start;
+        min-width: 0;
     }
 
     .col-title .mod-title {
-        font-size: 1.05rem;
-        font-weight: 700;
+        font-size: 1rem;
+        margin-bottom: 4px;
     }
 
     .col-title > div {
         display: flex;
-        gap: 8px;
+        gap: 6px;
         flex-wrap: wrap;
         align-items: center;
     }
 
     .col-desc {
-        display: block;
-        margin-top: 8px;
+        min-width: 0;
     }
 
     .col-desc .mod-description {
@@ -1698,151 +660,139 @@
 
     .col-actions {
         display: flex;
-        gap: 10px;
-        margin-top: 12px;
+        gap: 8px;
+        justify-content: flex-end;
     }
 
-    /* ============================================
-      EXTERNAL BUTTONS
-      ============================================ */
+    /* External link buttons */
     .ext-btn-text {
+        color: var(--primary);
+        background: var(--background);
+        border: 1px solid var(--card-border);
+        font-size: 0.8rem;
+        font-weight: 600;
+        padding: 6px 12px;
+        border-radius: 6px;
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 6px 12px;
-        border-radius: 4px;
-        font-size: 0.8rem;
-        color: var(--foreground);
-        background: var(--background);
-        border: 1px solid var(--card-border);
-        transition: all 0.2s;
-        text-decoration: none;
-        font-weight: 600;
+        transition: all 0.2s ease;
         white-space: nowrap;
+        cursor: pointer;
+        font-family: inherit;
+        text-decoration: none;
     }
 
     .ext-btn-text:hover {
-        background: var(--card-border);
+        background: var(--muted);
         border-color: var(--primary);
     }
 
     .ext-btn-text.small {
-        padding: 4px 8px;
         font-size: 0.75rem;
+        padding: 4px 8px;
     }
 
-    /* ============================================
-      FOOTER
-      ============================================ */
+    /* Footer */
     .footer-count {
         text-align: center;
-        font-size: 0.8rem;
         color: var(--muted-fg);
-        margin-top: 20px;
+        font-size: 0.9rem;
+        margin: 20px 0;
     }
 
     footer {
-        margin-top: auto;
-        padding: 20px 0;
-        border-top: 1px solid var(--card-border);
         background: var(--card);
+        border-top: 1px solid var(--card-border);
+        padding: 20px;
+        margin-top: auto;
     }
 
     .footer-content {
         max-width: 1200px;
         margin: 0 auto;
-        padding: 0 20px;
         display: flex;
         justify-content: space-between;
         align-items: center;
     }
 
     .copyright {
-        font-size: 0.85rem;
         color: var(--muted-fg);
+        font-size: 0.85rem;
     }
 
     .social-links {
         display: flex;
-        gap: 10px;
+        gap: 12px;
     }
 
     .social-btn {
-        padding: 6px 12px;
-        border-radius: 4px;
-        font-size: 0.85rem;
-        text-decoration: none;
-        font-weight: 600;
+        color: var(--muted-fg);
+        background: none;
+        border: none;
+        font-size: 1.2rem;
+        padding: 8px;
+        border-radius: 6px;
+        transition: all 0.2s ease;
+        width: 36px;
+        height: 36px;
         display: flex;
         align-items: center;
-        gap: 6px;
-        transition: all 0.2s;
+        justify-content: center;
+        cursor: pointer;
+        text-decoration: none;
     }
 
     .social-btn.github {
-        background: var(--background);
         color: var(--foreground);
-        border: 1px solid var(--card-border);
     }
 
     .social-btn.kofi {
-        background: #ff5e5b;
-        color: white;
+        color: #ff5722;
     }
 
     .social-btn:hover {
-        transform: translateY(-1px);
-        filter: brightness(1.1);
+        background: var(--muted);
+        transform: translateY(-2px);
     }
 
-    /* ============================================
-      EMPTY STATE
-      ============================================ */
+    /* Empty state */
     .empty-state {
+        text-align: center;
+        padding: 80px 20px;
+        color: var(--muted-fg);
         display: flex;
         flex-direction: column;
         align-items: center;
-        justify-content: center;
-        padding: 80px 20px;
-        text-align: center;
-        color: var(--muted-fg);
+        gap: 24px;
         animation: fadeIn 0.5s ease-out;
     }
 
     .icon-container {
-        font-size: 5rem;
-        margin-bottom: 24px;
-        opacity: 0.2;
-        transition: transform 0.3s ease;
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        background: var(--muted);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 4rem;
+        color: var(--muted-fg);
+        transition: all 0.3s ease;
+        opacity: 0.6;
     }
 
     .empty-state:hover .icon-container {
-        transform: scale(1.1) rotate(-5deg);
-        opacity: 0.4;
+        background: var(--card-border);
+        transform: scale(1.05) rotate(-5deg);
+        opacity: 0.8;
         color: var(--primary);
     }
 
-    .empty-state h2 {
-        font-size: 1.5rem;
-        font-weight: 700;
-        margin: 0 0 8px 0;
-        color: var(--foreground);
-        opacity: 0.8;
-    }
-
-    .empty-state p {
-        font-size: 0.95rem;
-        max-width: 400px;
-        line-height: 1.5;
-    }
-
-    /* ============================================
-      ANIMATIONS
-      ============================================ */
     @keyframes fadeIn {
         from {
             opacity: 0;
-            transform: translateY(10px);
+            transform: translateY(20px);
         }
         to {
             opacity: 1;
@@ -1850,15 +800,15 @@
         }
     }
 
-    @keyframes pulse {
-        0% {
-            opacity: 1;
-        }
-        50% {
-            opacity: 0.5;
-        }
-        100% {
-            opacity: 1;
-        }
+    .empty-state h2 {
+        margin: 0;
+        font-size: 1.5rem;
+        color: var(--foreground);
+    }
+
+    .empty-state p {
+        margin: 0;
+        font-size: 1rem;
+        max-width: 400px;
     }
 </style>
